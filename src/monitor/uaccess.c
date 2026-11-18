@@ -186,6 +186,20 @@ static int probe_faulted(long r, unsigned long n) {
  * the same reason the memfd regions do not. */
 static char g_land[UA_CHUNK];
 static char g_zero[UA_CHUNK];
+static long g_uaccess_pid;
+
+static inline long uaccess_pid(void) {
+    long p = __atomic_load_n(&g_uaccess_pid, __ATOMIC_RELAXED);
+    if (!p) {
+        p = sys_getpid();
+        __atomic_store_n(&g_uaccess_pid, p, __ATOMIC_RELAXED);
+    }
+    return p;
+}
+
+void cng_uaccess_fork_child(void) {
+    __atomic_store_n(&g_uaccess_pid, sys_getpid(), __ATOMIC_RELAXED);
+}
 
 /* One process_vm_readv/writev of [user, user+n) against our own address space.
  * `write` picks the direction: readv copies the guest's bytes into g_land,
@@ -194,7 +208,7 @@ static long pvm(const void *user, unsigned long n, int write) {
     struct cng_iovec local = {write ? (void *)g_zero : (void *)g_land, n};
     struct cng_iovec remote = {(void *)user, n};
     return CNG_SYS(write ? __NR_process_vm_writev : __NR_process_vm_readv,
-                   sys_getpid(), &local, 1, &remote, 1, 0);
+                   uaccess_pid(), &local, 1, &remote, 1, 0);
 }
 
 /* -1 undecided, 1 the pair works here, 0 it does not. */
@@ -335,7 +349,7 @@ long cng_user_copyin(void *dst, const void *src, unsigned long n) {
     if (cng_uaccess_probe_setup()) {
         struct cng_iovec local = {dst, n};
         struct cng_iovec remote = {(void *)src, n};
-        long r = CNG_SYS(__NR_process_vm_readv, sys_getpid(), &local, 1, &remote,
+        long r = CNG_SYS(__NR_process_vm_readv, uaccess_pid(), &local, 1, &remote,
                          1, 0);
         return r == (long)n ? 0 : -EFAULT;
     }
@@ -365,7 +379,7 @@ long cng_user_copyout(void *dst, const void *src, unsigned long n) {
     if (cng_uaccess_probe_setup()) {
         struct cng_iovec local = {(void *)src, n};
         struct cng_iovec remote = {dst, n};
-        long r = CNG_SYS(__NR_process_vm_writev, sys_getpid(), &local, 1,
+        long r = CNG_SYS(__NR_process_vm_writev, uaccess_pid(), &local, 1,
                          &remote, 1, 0);
         return r == (long)n ? 0 : -EFAULT;
     }

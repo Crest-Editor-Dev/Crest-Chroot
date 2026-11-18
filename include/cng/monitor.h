@@ -599,6 +599,8 @@ int cng_sig_install(int signo, cng_sighandler_t h);
  * cng_scratch_leave gives the stack back for a call that never returns. */
 int cng_run_scratch(void (*fn)(void *), void *arg);
 void cng_scratch_leave(void);
+void cng_scratch_fork_child(void);
+void cng_uaccess_fork_child(void);
 /* ...for a dispatch from guest context, with `f` (its r set) published as this
  * thread's innermost cng_gframe for as long as `fn` runs. The slot lookup is
  * the one the stack switch makes anyway, so this costs three stores. */

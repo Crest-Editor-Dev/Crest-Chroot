@@ -2422,6 +2422,85 @@ long cng_fd_reopen(const char *host, long flags, long mode, long err) {
     return r;
 }
 
+#define CNG_PCACHE_N 64
+struct cng_pcache_entry {
+    unsigned int gen;
+    int dfd;
+    int deref;
+    unsigned int hash;
+    char guest[128];
+    char host[512];
+};
+
+static struct cng_pcache_entry g_pcache[CNG_PCACHE_N];
+static unsigned int g_pcache_gen = 1;
+
+static inline void pcache_invalidate(void) {
+    __atomic_add_fetch(&g_pcache_gen, 1, __ATOMIC_RELEASE);
+}
+
+void cng_pcache_fork_child(void) {
+    pcache_invalidate();
+}
+
+static unsigned int pcache_hash(int dfd, const char *p, int deref) {
+    unsigned int h = (unsigned int)dfd * 31 + (unsigned int)deref * 17;
+    for (const unsigned char *s = (const unsigned char *)p; *s; s++)
+        h = h * 33 + *s;
+    return h;
+}
+
+static int pcache_lookup(int dfd, const char *gp, int deref, char *buf, size_t bufsz) {
+    if (!gp || gp[0] != '/' || gp[1] == '\0')
+        return 0;
+    /* Do not cache proc or dev magic zones */
+    if ((gp[1] == 'p' && strncmp(gp, "/proc", 5) == 0 && (gp[5] == '/' || gp[5] == '\0')) ||
+        (gp[1] == 'd' && strncmp(gp, "/dev", 4) == 0 && (gp[4] == '/' || gp[4] == '\0')))
+        return 0;
+
+    unsigned int cur_gen = __atomic_load_n(&g_pcache_gen, __ATOMIC_ACQUIRE);
+    unsigned int h = pcache_hash(dfd, gp, deref);
+    unsigned int idx = h % CNG_PCACHE_N;
+    struct cng_pcache_entry *e = &g_pcache[idx];
+
+    if (__atomic_load_n(&e->gen, __ATOMIC_ACQUIRE) == cur_gen &&
+        e->hash == h &&
+        e->dfd == dfd &&
+        e->deref == deref &&
+        strcmp(e->guest, gp) == 0) {
+        size_t n = cng_strlcpy(buf, e->host, bufsz);
+        if (n < bufsz && __atomic_load_n(&e->gen, __ATOMIC_ACQUIRE) == cur_gen)
+            return 1;
+    }
+    return 0;
+}
+
+static void pcache_insert(int dfd, const char *gp, int deref, const char *host) {
+    if (!gp || gp[0] != '/' || !host || host[0] != '/')
+        return;
+    if ((gp[1] == 'p' && strncmp(gp, "/proc", 5) == 0) ||
+        (gp[1] == 'd' && strncmp(gp, "/dev", 4) == 0))
+        return;
+
+    size_t glen = strlen(gp);
+    size_t hlen = strlen(host);
+    if (glen >= sizeof(g_pcache[0].guest) || hlen >= sizeof(g_pcache[0].host))
+        return;
+
+    unsigned int cur_gen = __atomic_load_n(&g_pcache_gen, __ATOMIC_ACQUIRE);
+    unsigned int h = pcache_hash(dfd, gp, deref);
+    unsigned int idx = h % CNG_PCACHE_N;
+    struct cng_pcache_entry *e = &g_pcache[idx];
+
+    __atomic_store_n(&e->gen, 0, __ATOMIC_RELEASE);
+    e->dfd = dfd;
+    e->deref = deref;
+    e->hash = h;
+    memcpy(e->guest, gp, glen + 1);
+    memcpy(e->host, host, hlen + 1);
+    __atomic_store_n(&e->gen, cur_gen, __ATOMIC_RELEASE);
+}
+
 static const char *xlate_lim(long dirfd, const char *gp, char *buf,
                              size_t bufsz, int deref_final,
                              struct cng_res_limit *lim) {
@@ -2439,9 +2518,14 @@ static const char *xlate_lim(long dirfd, const char *gp, char *buf,
     }
     int dfd = (int)dirfd; /* int arg: the x-register's top half may be dirty */
     if (gp[0] == '/' || dfd == CNG_AT_FDCWD) {
-        long r = cng_resolve_lim(gp, deref_final, buf, bufsz, lim);
-        if (r == 0)
+        if (!lim && pcache_lookup(dfd, gp, deref_final, buf, bufsz))
             return buf;
+        long r = cng_resolve_lim(gp, deref_final, buf, bufsz, lim);
+        if (r == 0) {
+            if (!lim)
+                pcache_insert(dfd, gp, deref_final, buf);
+            return buf;
+        }
         if (lim && lim->err)
             return XLATE_TOOLONG; /* the caller reads lim->err, not this */
         /* The walk's own refusal, which the lexical translation below would
@@ -2449,8 +2533,11 @@ static const char *xlate_lim(long dirfd, const char *gp, char *buf,
          * name for (an fd link to one; see cng_resolve_lim). */
         if (r == -EACCES)
             return XLATE_OUTSIDE;
-        if (cng_fs_translate(cng_g_fs, gp, buf, bufsz) == 0)
+        if (cng_fs_translate(cng_g_fs, gp, buf, bufsz) == 0) {
+            if (!lim)
+                pcache_insert(dfd, gp, deref_final, buf);
             return buf;
+        }
         /* Both routes failing means the name does not fit — cng_fs_translate
          * has no other way to fail — so there is nothing to hand back. Falling
          * through to the guest's own spelling, which is what this used to do,
@@ -2590,6 +2677,16 @@ static int at_canon(long dirfd, const char *path, char *out, size_t sz);
  * file: absolute and cwd-relative names canonicalize without a syscall, a real
  * dirfd costs a readlink and is resolved only for a name leaf_may_synth()
  * lets through. 1 with `canon` filled, else 0. */
+static inline int path_has_dotdot(const char *s) {
+    if (!s) return 0;
+    while (*s) {
+        if (s[0] == '.' && s[1] == '.' && (s[2] == '/' || s[2] == '\0'))
+            return 1;
+        s++;
+    }
+    return 0;
+}
+
 static int synth_canon_at(long dirfd, const char *gp, char *canon, size_t sz) {
     if (!gp)
         return 0;
@@ -4311,6 +4408,9 @@ void cng_clone_convert(struct cng_uregs *ur) {
         cng_nnp_fork_child(nnp); /* one task, holding what we held */
         cng_rseq_fork_child(rseq_keep);
         cng_exec_fork_child(); /* an exec another thread had in flight is not ours */
+        cng_scratch_fork_child();
+        cng_uaccess_fork_child();
+        cng_pcache_fork_child();
         /* ...nor a bounced dispatch another thread was blocked in. */
         __atomic_store_n(&g_disp_bounced, 0, __ATOMIC_RELAXED);
         /* The child inherited both the mappings and the attach list, so the
@@ -4587,7 +4687,7 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
                  * does and so is the one entitled to answer EXDEV. */
                 if ((have = have_scanon))
                     cng_strlcpy(canon, scanon, sizeof canon);
-            } else {
+            } else if (!gp || gp[0] != '/' || (gp[1] == 'p' && strncmp(gp, "/proc", 5) == 0) || path_has_dotdot(gp)) {
                 have = synth_canon_at(a0, gp, canon, sizeof canon);
             }
             if (have && !strncmp(canon, "/proc", 5) &&
@@ -4705,6 +4805,10 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
             r = reissue(CNG_AT_FDCWD, (long)l2d, ha2, ha3, a4, a5, rnr);
         if ((r == -EACCES || r == -EPERM) && nr == __NR_openat)
             r = cng_fd_reopen(p, a2, a3, r);
+        if (r >= 0 && (nr == __NR_mkdirat || nr == __NR_mknodat ||
+                       nr == __NR_symlinkat ||
+                       (is_open && (oflags & (CNG_O_CREAT | CNG_O_TRUNC)))))
+            pcache_invalidate();
         return r;
     }
 
@@ -4859,8 +4963,11 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
         /* A group whose data is under a :ro bind (see ro_denied_l2s) loses a
          * writable name, and keeps its count: the marker is on the :ro
          * mount, and nothing is written there. */
-        if (r == 0 && dec && !cng_fs_host_ro(cng_g_fs, data))
-            cng_l2s_decref(data, cnt);
+        if (r == 0) {
+            if (dec && !cng_fs_host_ro(cng_g_fs, data))
+                cng_l2s_decref(data, cnt);
+            pcache_invalidate();
+        }
         return r;
     }
 
@@ -4927,9 +5034,7 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
          * keyed on the fd, not the name. */
         int byfd = ((int)a3 & CNG_AT_EMPTY_PATH) && a1 &&
                    !((const char *)a1)[0];
-        int bounce = a2 && (cng_g_l2s || cng_g_fake_id || !cng_g_no_proc);
         char sb[STAT_BUF_SIZE];
-        long ob = bounce ? (long)sb : a2;
         if (cng_g_l2s && a2) {
             char hnf[CNG_PATH_MAX];
             if (cng_resolve_at(a0, (const char *)a1, 0, hnf, sizeof hnf) == 0 &&
@@ -4944,43 +5049,48 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
         const char *p = xlate(a0, (const char *)a1, b1, sizeof b1, deref);
         if (xlate_bad(p))
             return xlate_errno(p);
+        int is_proc = !cng_g_no_proc && (byfd || (p && p[0] == '/' && p[1] == 'p' && strncmp(p, "/proc", 5) == 0));
+        int bounce = a2 && (byfd || is_proc);
+        long ob = bounce ? (long)sb : a2;
         long r = reissue(a0, (long)p, ob, a3, a4, a5, __NR_newfstatat);
-        /* The host's refusal of a synthesized name (Android's SELinux denies
-         * the getattr of the global files it hides) is not the file's answer:
-         * the guest was served it in full, and stat says what any /proc
-         * regular file would. */
-        if (!cng_g_no_proc && a2 && cng_procfs_refused(r)) {
-            char canon[CNG_PATH_MAX];
-            if (byfd ? cng_procfs_synth_fd_stat((int)a0, sb)
-                     : synth_stat_canon(a0, (const char *)a1, canon,
-                                        sizeof canon) &&
-                           cng_procfs_synth_stat(canon, deref, sb))
-                r = 0;
+        if (bounce) {
+            /* The host's refusal of a synthesized name (Android's SELinux denies
+             * the getattr of the global files it hides) is not the file's answer:
+             * the guest was served it in full, and stat says what any /proc
+             * regular file would. */
+            if (!cng_g_no_proc && a2 && cng_procfs_refused(r)) {
+                char canon[CNG_PATH_MAX];
+                if (byfd ? cng_procfs_synth_fd_stat((int)a0, sb)
+                         : synth_stat_canon(a0, (const char *)a1, canon,
+                                            sizeof canon) &&
+                               cng_procfs_synth_stat(canon, deref, sb))
+                    r = 0;
+            }
+            /* A synthesized /proc fd, asked about by fd or through its own fd link
+             * (stat -L /proc/self/fd/N lands on the memfd the same way). */
+            if (r == 0 && !cng_g_no_proc && a2) {
+                if (byfd)
+                    cng_procfs_fix_fd((int)a0, sb);
+                else if (deref)
+                    cng_procfs_fix_path(a0, p, sb);
+            }
+            if (r == 0 && byfd && a2 && cng_g_l2s)
+                cng_l2s_fix_fd(a0, sb);
+            /* A process's /proc entries are its owner's (cng_procfs_owner). */
+            if (r == 0 && cng_g_fake_id && a2 && !cng_procfs_owner(a0, p, sb))
+                stat_remap(sb);
+            if (r == 0 && cng_user_copyout((void *)a2, sb, sizeof sb) < 0)
+                return -EFAULT;
+        } else if (r == 0 && cng_g_fake_id && a2) {
+            stat_remap((void *)a2);
         }
-        /* A synthesized /proc fd, asked about by fd or through its own fd link
-         * (stat -L /proc/self/fd/N lands on the memfd the same way). */
-        if (r == 0 && !cng_g_no_proc && a2) {
-            if (byfd)
-                cng_procfs_fix_fd((int)a0, sb);
-            else if (deref)
-                cng_procfs_fix_path(a0, p, sb);
-        }
-        if (r == 0 && byfd && a2 && cng_g_l2s)
-            cng_l2s_fix_fd(a0, sb);
-        /* A process's /proc entries are its owner's (cng_procfs_owner). */
-        if (r == 0 && cng_g_fake_id && a2 && !cng_procfs_owner(a0, p, sb))
-            stat_remap(sb);
-        if (r == 0 && bounce && cng_user_copyout((void *)a2, sb, sizeof sb) < 0)
-            return -EFAULT;
         return r;
     }
     case __NR_statx: {
         /* Bounced on the same terms as newfstatat above. */
         int byfd = ((int)a2 & CNG_AT_EMPTY_PATH) && a1 &&
                    !((const char *)a1)[0];
-        int bounce = a4 && (cng_g_l2s || cng_g_fake_id || !cng_g_no_proc);
         char sx[STATX_BUF_SIZE];
-        long ob = bounce ? (long)sx : a4;
         if (cng_g_l2s && a4) {
             char hnf[CNG_PATH_MAX];
             if (cng_resolve_at(a0, (const char *)a1, 0, hnf, sizeof hnf) == 0 &&
@@ -4995,32 +5105,39 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
         const char *p = xlate(a0, (const char *)a1, b1, sizeof b1, deref);
         if (xlate_bad(p))
             return xlate_errno(p);
+        int is_proc = !cng_g_no_proc && (byfd || (p && p[0] == '/' && p[1] == 'p' && strncmp(p, "/proc", 5) == 0));
+        int bounce = a4 && (byfd || is_proc);
+        long ob = bounce ? (long)sx : a4;
         long r = reissue(a0, (long)p, a2, a3, ob, a5, __NR_statx);
-        /* Refused by the host: see newfstatat above. */
-        if (!cng_g_no_proc && a4 && cng_procfs_refused(r)) {
-            char canon[CNG_PATH_MAX];
-            if (byfd ? cng_procfs_synth_fd_statx((int)a0, (unsigned)a2,
-                                                 (unsigned)a3, sx)
-                     : synth_stat_canon(a0, (const char *)a1, canon,
-                                        sizeof canon) &&
-                           cng_procfs_synth_statx(canon, deref, (unsigned)a2,
-                                                  (unsigned)a3, sx))
-                r = 0;
+        if (bounce) {
+            /* Refused by the host: see newfstatat above. */
+            if (!cng_g_no_proc && a4 && cng_procfs_refused(r)) {
+                char canon[CNG_PATH_MAX];
+                if (byfd ? cng_procfs_synth_fd_statx((int)a0, (unsigned)a2,
+                                                     (unsigned)a3, sx)
+                         : synth_stat_canon(a0, (const char *)a1, canon,
+                                            sizeof canon) &&
+                               cng_procfs_synth_statx(canon, deref, (unsigned)a2,
+                                                      (unsigned)a3, sx))
+                    r = 0;
+            }
+            if (r == 0 && !cng_g_no_proc && a4) {
+                if (byfd)
+                    cng_procfs_fix_fd_statx((int)a0, (unsigned)a2, (unsigned)a3,
+                                            sx);
+                else if (deref)
+                    cng_procfs_fix_path_statx(a0, p, (unsigned)a2, (unsigned)a3,
+                                              sx);
+            }
+            if (r == 0 && byfd && a4 && cng_g_l2s)
+                cng_l2s_fix_fd_statx(a0, sx);
+            if (r == 0 && cng_g_fake_id && a4 && !cng_procfs_owner_statx(a0, p, sx))
+                statx_remap(sx);
+            if (r == 0 && cng_user_copyout((void *)a4, sx, sizeof sx) < 0)
+                return -EFAULT;
+        } else if (r == 0 && cng_g_fake_id && a4) {
+            statx_remap((void *)a4);
         }
-        if (r == 0 && !cng_g_no_proc && a4) {
-            if (byfd)
-                cng_procfs_fix_fd_statx((int)a0, (unsigned)a2, (unsigned)a3,
-                                        sx);
-            else if (deref)
-                cng_procfs_fix_path_statx(a0, p, (unsigned)a2, (unsigned)a3,
-                                          sx);
-        }
-        if (r == 0 && byfd && a4 && cng_g_l2s)
-            cng_l2s_fix_fd_statx(a0, sx);
-        if (r == 0 && cng_g_fake_id && a4 && !cng_procfs_owner_statx(a0, p, sx))
-            statx_remap(sx);
-        if (r == 0 && bounce && cng_user_copyout((void *)a4, sx, sizeof sx) < 0)
-            return -EFAULT;
         return r;
     }
 
@@ -5394,6 +5511,8 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
             cng_l2s_rename_fixup(dsth, absdata);
         if (r == 0 && fix_back)
             cng_l2s_rename_fixup(hnf, sdata);
+        if (r == 0)
+            pcache_invalidate();
         return r;
     }
 
@@ -5620,8 +5739,12 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
             int s = cng_l2s_link(srch, dsth);
             if (cng_g_debug)
                 cng_dprintf(2, "[cng] l2s %s -> %s rc=%d\n", srch, dsth, s);
+            if (s == 0)
+                pcache_invalidate();
             return s;
         }
+        if (r == 0)
+            pcache_invalidate();
         return r;
     }
 
@@ -6400,6 +6523,7 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
         if ((*(unsigned *)(sb + STAT_MODE_OFF) & 0170000) != 0040000)
             return -ENOTDIR;
         cng_fs_chroot(cng_g_fs, gc, hp);
+        pcache_invalidate();
         return 0;
     }
 

@@ -2688,6 +2688,7 @@ int cng_cmd_faulttest(int argc, char **argv, char **envp, unsigned long *auxv) {
         char csrc[256], cdst[256];
         long kid = sys_fork();
         if (kid == 0) {
+            cng_uaccess_fork_child();
             unsigned long cino = cng_uaccess_scratch_ino();
             if (!pino || !cino || cino == pino)
                 sys_exit_group(1);

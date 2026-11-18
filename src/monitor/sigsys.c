@@ -647,6 +647,8 @@ extern long cng_run_on_stack(void *newsp, void *fn, void *a0, void *a1);
 #define CNG_SCR_SZ (256 * 1024)
 static struct {
     long tid;
+    unsigned long tls;
+    long pid;
     unsigned long lo, hi;
     int busy;
     /* The signal frame the dispatcher on this stack is running for. Its
@@ -674,6 +676,16 @@ static struct {
         unsigned long long pc, sp, x0, x1, x2, x8, x30;
     } back;
 } cng_scr[CNG_SCR_N];
+
+static volatile unsigned long g_scr_tls_val[CNG_SCR_N];
+static volatile int g_scr_tls_slot[CNG_SCR_N];
+static long cng_g_scr_pid;
+
+static inline unsigned long cng_get_tls(void) {
+    unsigned long val;
+    __asm__ volatile("mrs %0, tpidr_el0" : "=r"(val));
+    return val;
+}
 
 /* Claim `*p` from `want` to `tid` (inline LL/SC so we need no libgcc atomics
  * helper; works on any ARMv8). Returns 1 if this call performed the store. */
@@ -734,6 +746,8 @@ static int scr_map(unsigned i) {
     unsigned long base = scr_mmap();
     if (!base) {
         cng_scr[i].tid = 0;
+        cng_scr[i].tls = 0;
+        cng_scr[i].pid = 0;
         return -1;
     }
     cng_scr[i].lo = (unsigned long)base;
@@ -818,6 +832,8 @@ static int cng_scratch_slot(long tid) {
             continue;
         if (!cng_claim_slot(&cng_scr[i].tid, t, tid))
             continue; /* another thread reclaimed it first */
+        cng_scr[i].tls = 0;
+        cng_scr[i].pid = 0;
         cng_scr[i].busy = 0;
         cng_scr[i].uc = 0;
         cng_scr[i].sigfull = 0;
@@ -831,6 +847,48 @@ static int cng_scratch_slot(long tid) {
         return (int)i;
     }
     return -1;
+}
+
+/* Fast-path scratch slot lookup using validated TPIDR_EL0.
+ * Returns slot index 0..CNG_SCR_N-1 on validated hit, or -1 on miss. */
+static inline int cng_scratch_slot_fast(unsigned long tls) {
+    if (!tls || cng_g_scratch_none)
+        return -1;
+    long cur_pid = cng_g_scr_pid;
+    if (!cur_pid)
+        cng_g_scr_pid = cur_pid = sys_getpid();
+    unsigned h = (unsigned)((tls ^ (tls >> 12)) * 2654435761u) % CNG_SCR_N;
+    if (__atomic_load_n(&g_scr_tls_val[h], __ATOMIC_ACQUIRE) == tls) {
+        int i = g_scr_tls_slot[h];
+        if (i >= 0 && i < CNG_SCR_N &&
+            __atomic_load_n(&cng_scr[i].tls, __ATOMIC_ACQUIRE) == tls &&
+            cng_scr[i].pid == cur_pid &&
+            __atomic_load_n(&cng_scr[i].hi, __ATOMIC_ACQUIRE) != 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Cold-path: look up or allocate a slot for the current thread via sys_gettid(),
+ * and cache the validated TPIDR_EL0 mapping for subsequent fast lookups. */
+static int cng_scratch_slot_resolve(void) {
+    long tid = sys_gettid();
+    int i = cng_scratch_slot(tid);
+    if (i >= 0) {
+        unsigned long tls = cng_get_tls();
+        if (tls) {
+            long cur_pid = cng_g_scr_pid;
+            if (!cur_pid)
+                cng_g_scr_pid = cur_pid = sys_getpid();
+            cng_scr[i].pid = cur_pid;
+            __atomic_store_n(&cng_scr[i].tls, tls, __ATOMIC_RELEASE);
+            unsigned h = (unsigned)((tls ^ (tls >> 12)) * 2654435761u) % CNG_SCR_N;
+            g_scr_tls_slot[h] = i;
+            __atomic_store_n(&g_scr_tls_val[h], tls, __ATOMIC_RELEASE);
+        }
+    }
+    return i;
 }
 
 /* A thread of a program that calls pthread_exit on a detached thread — bionic
@@ -1220,8 +1278,9 @@ static void sigsys_handler(int sig, cng_siginfo_t *si, void *ucv) {
             return;
         }
     }
-    long tid = sys_gettid();
-    int i = cng_scratch_slot(tid);
+    int i = cng_scratch_slot_fast(cng_get_tls());
+    if (i < 0)
+        i = cng_scratch_slot_resolve();
     if (i < 0 || cng_scr[i].busy) {
         if (cng_g_sigsys_frame[0]) /* the test above: this is the nested one */
             cng_g_sigsys_frame[1] = (unsigned long)ucv;
@@ -1284,7 +1343,9 @@ int cng_run_scratch(void (*fn)(void *), void *arg) {
 /* The record is published with a plain store: the only reader is a kick
  * handler on this same thread, which a signal delivery orders after it. */
 int cng_run_scratch_in(void (*fn)(void *), void *arg, struct cng_gframe *f) {
-    int i = cng_scratch_slot(sys_gettid());
+    int i = cng_scratch_slot_fast(cng_get_tls());
+    if (i < 0)
+        i = cng_scratch_slot_resolve();
     unsigned long sp = (unsigned long)&i;
     if (f && i >= 0) {
         f->prev = cng_scr[i].gf;
@@ -1342,9 +1403,61 @@ static int cng_run_scratch_on(int i, unsigned long sp, void (*fn)(void *),
  * flag would send every later SIGSYS on this thread back onto the guest's own
  * stack — the thing this all exists to avoid. */
 void cng_scratch_leave(void) {
+    unsigned long tls = cng_get_tls();
+    if (tls) {
+        unsigned h = (unsigned)((tls ^ (tls >> 12)) * 2654435761u) % CNG_SCR_N;
+        if (__atomic_load_n(&g_scr_tls_val[h], __ATOMIC_ACQUIRE) == tls) {
+            int slot = g_scr_tls_slot[h];
+            __atomic_store_n(&g_scr_tls_val[h], 0, __ATOMIC_RELEASE);
+            if (slot >= 0 && slot < CNG_SCR_N)
+                __atomic_store_n(&cng_scr[slot].tls, 0, __ATOMIC_RELEASE);
+        }
+    }
     int i = cng_scratch_slot(sys_gettid());
     if (i >= 0)
         cng_scr[i].busy = 0;
+}
+
+/* Fork child initialization: the child process has a single live thread.
+ * Clean stale parent state and rebind this thread's slot to child PID. */
+void cng_scratch_fork_child(void) {
+    long new_pid = sys_getpid();
+    cng_g_scr_pid = new_pid;
+    unsigned long my_tls = cng_get_tls();
+    int my_slot = -1;
+
+    for (int k = 0; k < CNG_SCR_N; k++) {
+        g_scr_tls_val[k] = 0;
+        g_scr_tls_slot[k] = -1;
+    }
+
+    for (int k = 0; k < CNG_SCR_N; k++) {
+        if (my_tls && cng_scr[k].tls == my_tls) {
+            my_slot = k;
+            cng_scr[k].tid = new_pid;
+            cng_scr[k].pid = new_pid;
+            cng_scr[k].busy = 0;
+            cng_scr[k].uc = 0;
+            cng_scr[k].gf = 0;
+            cng_scr[k].attach = 0;
+            cng_scr[k].inh = 0;
+        } else {
+            cng_scr[k].tid = 0;
+            cng_scr[k].tls = 0;
+            cng_scr[k].pid = 0;
+            cng_scr[k].busy = 0;
+            cng_scr[k].uc = 0;
+            cng_scr[k].gf = 0;
+            cng_scr[k].attach = 0;
+            cng_scr[k].inh = 0;
+        }
+    }
+
+    if (my_slot >= 0 && my_tls) {
+        unsigned h = (unsigned)((my_tls ^ (my_tls >> 12)) * 2654435761u) % CNG_SCR_N;
+        g_scr_tls_slot[h] = my_slot;
+        __atomic_store_n(&g_scr_tls_val[h], my_tls, __ATOMIC_RELEASE);
+    }
 }
 
 /* Is a signal pending that the guest would take delivery of?
