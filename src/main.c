@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Copyright 2026 Sylirre */
-/* chroot-ng: ptrace-free chroot/bind emulation for rootless, SELinux-restricted
+/* crest-chroot: ptrace-free chroot/bind emulation for rootless, SELinux-restricted
  * Android. Command-line front end.
  *
- *   chroot-ng [options] <rootfs> <program> [args...]   (normal use)
- *   chroot-ng --probe [path...]                         (capability probe)
- *   chroot-ng --help | --version
+ *   crest-chroot [options] <rootfs> <program> [args...]   (normal use)
+ *   crest-chroot --probe [path...]                         (capability probe)
+ *   crest-chroot --help | --version
  *
  * The full option / environment reference lives in help() below (reachable via
  * -h/--help), which reflows it to the terminal width. Keep the option strings
@@ -127,7 +127,7 @@ static int dispatch_test(const char *name, int argc, char **argv, char **envp,
             cng_probe_blocked();
             return g_tests[k].fn(argc, argv, envp, auxv);
         }
-    cng_dprintf(2, "chroot-ng: unknown test '%s'\n", name);
+    cng_dprintf(2, "crest-chroot: unknown test '%s'\n", name);
     return 2;
 }
 
@@ -151,9 +151,9 @@ static void out_pad(int fd, int n) {
  * lives in help(), reachable via -h/--help. */
 static void usage(int fd) {
     out_str(fd,
-        "usage: chroot-ng [options] <rootfs> <program> [args...]\n"
-        "       chroot-ng --probe [path...]\n"
-        "try 'chroot-ng --help' for details\n");
+        "usage: crest-chroot [options] <rootfs> <program> [args...]\n"
+        "       crest-chroot --probe [path...]\n"
+        "try 'crest-chroot --help' for details\n");
 }
 
 static void version(void) {
@@ -375,7 +375,7 @@ static void help(char **envp) {
                       "answer EROFS). DST must be absolute; host paths may not "
                       "contain ':'."},
         {"-E, --env VAR=VAL", "Set a guest environment variable (repeatable, up "
-                      "to 128). The guest does NOT inherit chroot-ng's "
+                      "to 128). The guest does NOT inherit crest-chroot's "
                       "environment: a host variable describes the host, not the "
                       "rootfs — PATH, HOME, LD_*, XDG_*, TMPDIR would each send "
                       "a guest looking outside it — so only TERM and COLORTERM "
@@ -391,7 +391,7 @@ static void help(char **envp) {
                       "be an existing directory; an absolute one resolves from "
                       "the guest root, a relative one against the default. The "
                       "default is the guest root '/' — the host directory "
-                      "chroot-ng was launched from is never leaked to the guest "
+                      "crest-chroot was launched from is never leaked to the guest "
                       "— except under an identity rootfs ('/'), where the host "
                       "cwd already is a guest path and is kept."},
         {"-u, --fake-id[=ID]", "Present a fake user identity. ID is a uid or "
@@ -459,7 +459,7 @@ static void help(char **envp) {
                       "is visible to the guest (a rootfs directory tree has "
                       "none, and mounting one needs privileges we lack), host "
                       "processes are hidden from it, and the files that would "
-                      "describe chroot-ng rather than the guest — cmdline, "
+                      "describe crest-chroot rather than the guest — cmdline, "
                       "environ, auxv, maps, mounts, mountinfo, mountstats — are "
                       "served from the guest's own view, as are loadavg, uptime "
                       "and stat where the host denies them. With this flag the "
@@ -467,13 +467,13 @@ static void help(char **envp) {
                       "explicit -b) provides."},
         {"    --no-ptrace", "Refuse guest ptrace(2) with EPERM instead of "
                       "emulating it. By default a guest tracer (strace, gdb, "
-                      "proot) works: chroot-ng emulates the whole stop protocol "
+                      "proot) works: crest-chroot emulates the whole stop protocol "
                       "in-process, since the host kernel's ptrace would show a "
                       "tracer our own re-issued syscalls and host paths. The "
                       "machinery costs nothing until something actually traces, "
                       "but a traced task then stops on every syscall."},
         {"    --shared-proc", "Share the guest process view between independent "
-                      "chroot-ng invocations of the same rootfs, so ps/top in "
+                      "crest-chroot invocations of the same rootfs, so ps/top in "
                       "one session see the guest processes of another. The "
                       "registry is served diskless by a per-rootfs broker "
                       "daemon (an anonymous memfd over an abstract socket) "
@@ -501,7 +501,7 @@ static void help(char **envp) {
                       "value that is not a positive number is ignored."},
         {"CNG_DEBUG", "When set to a non-empty, non-zero value, log verbose "
                       "syscall-error diagnostics to stderr, including each "
-                      "syscall the host refuses and chroot-ng emulates."},
+                      "syscall the host refuses and crest-chroot emulates."},
         {"CNG_L2S_FORCE", "With -l: route every linkat through the emulation "
                       "without trying the real hardlink first. Test aid for "
                       "hosts whose filesystem allows link(2)."},
@@ -528,7 +528,7 @@ static void help(char **envp) {
                       "/dev/shm; where none can be made the guest has no "
                       "/dev/shm, as on a device. Test aid: a host that has "
                       "one otherwise never takes the stand-in path at all."},
-        {"CNG_TMP_ENV_ONLY", "Look for chroot-ng's private temp directories "
+        {"CNG_TMP_ENV_ONLY", "Look for crest-chroot's private temp directories "
                       "(the /dev/shm stand-in, read-only /proc views) only "
                       "under $TMPDIR and $XDG_RUNTIME_DIR, passing over "
                       "/data/local/tmp and /tmp. Test aid: a host whose /tmp "
@@ -579,7 +579,7 @@ static void help(char **envp) {
                       "them. Test aid: a host that allows them never takes "
                       "that path."},
         {"CNG_OPENAT2_DENY", "Take openat2 as refused by the host, as "
-                      "Android's app filter refuses it, so chroot-ng never "
+                      "Android's app filter refuses it, so crest-chroot never "
                       "issues it itself and a guest's openat2 is emulated "
                       "-- as it is on a kernel without one. Test aid: a host "
                       "that allows it never takes that path."},
@@ -596,25 +596,25 @@ static void help(char **envp) {
                       "other way to be exercised."},
     };
     static const char *const examples[] = {
-        "chroot-ng --probe",
-        "chroot-ng -u ./rootfs /bin/sh",
-        "chroot-ng --fake-id 1000:1000 --setuid-root --setgid-root ./rootfs /bin/su -",
-        "chroot-ng -u -E HOME=/root -E PATH=/usr/bin:/bin ./rootfs /bin/sh -l",
-        "chroot-ng -u -w /root ./rootfs /bin/sh",
-        "chroot-ng -u -l ./rootfs /sbin/apk add busybox",
-        "chroot-ng -R -b /data/local/tmp:/tmp ./rootfs /bin/busybox sh",
-        "chroot-ng / /usr/bin/uname -a",
+        "crest-chroot --probe",
+        "crest-chroot -u ./rootfs /bin/sh",
+        "crest-chroot --fake-id 1000:1000 --setuid-root --setgid-root ./rootfs /bin/su -",
+        "crest-chroot -u -E HOME=/root -E PATH=/usr/bin:/bin ./rootfs /bin/sh -l",
+        "crest-chroot -u -w /root ./rootfs /bin/sh",
+        "crest-chroot -u -l ./rootfs /sbin/apk add busybox",
+        "crest-chroot -R -b /data/local/tmp:/tmp ./rootfs /bin/busybox sh",
+        "crest-chroot / /usr/bin/uname -a",
     };
 
     help_section(fd, "USAGE");
-    help_wrap(fd, "chroot-ng [options] <rootfs> <program> [args...]\n\n"
-                  "chroot-ng --probe [path...]", w, 2, 0);
+    help_wrap(fd, "crest-chroot [options] <rootfs> <program> [args...]\n\n"
+                  "crest-chroot --probe [path...]", w, 2, 0);
 
     help_section(fd, "DESCRIPTION");
     help_wrap(fd,
         "Ptrace-free chroot / bind-mount emulation for rootless, "
         "SELinux-restricted Android without user namespaces. Instead of a "
-        "ptrace tracer, chroot-ng intercepts the path-bearing syscalls "
+        "ptrace tracer, crest-chroot intercepts the path-bearing syscalls "
         "in-process via seccomp RET_TRAP -> SIGSYS, and runs guest programs "
         "with its own userland ELF loader, so it can also execute binaries off "
         "'noexec' mounts.\n\n"
@@ -632,7 +632,7 @@ static void help(char **envp) {
     help_defs(fd, opts, (int)(sizeof opts / sizeof *opts), w);
 
     help_section(fd, "ENVIRONMENT");
-    help_wrap(fd, "Read from chroot-ng's own environment. None of it reaches the "
+    help_wrap(fd, "Read from crest-chroot's own environment. None of it reaches the "
                   "guest, whose environment is built from -E/--env plus an "
                   "inherited TERM/COLORTERM.", w, 2, 0);
     out_ch(fd, '\n');
@@ -646,27 +646,27 @@ static void help(char **envp) {
 /* --- command-line parsing errors ------------------------------------------ */
 
 static int err_unknown(const char *opt) {
-    cng_dprintf(2, "chroot-ng: unknown option '%s'\n", opt);
+    cng_dprintf(2, "crest-chroot: unknown option '%s'\n", opt);
     usage(2);
     return 2;
 }
 static int err_unknown_short(char c) {
-    cng_dprintf(2, "chroot-ng: unknown option '-%c'\n", c);
+    cng_dprintf(2, "crest-chroot: unknown option '-%c'\n", c);
     usage(2);
     return 2;
 }
 static int err_needarg(const char *opt) {
-    cng_dprintf(2, "chroot-ng: option '%s' requires an argument\n", opt);
+    cng_dprintf(2, "crest-chroot: option '%s' requires an argument\n", opt);
     usage(2);
     return 2;
 }
 static int err_noval(const char *opt) {
-    cng_dprintf(2, "chroot-ng: option '%s' takes no value\n", opt);
+    cng_dprintf(2, "crest-chroot: option '%s' takes no value\n", opt);
     usage(2);
     return 2;
 }
 static int err_badid(const char *spec) {
-    cng_dprintf(2, "chroot-ng: --fake-id '%s': expected UID or UID:GID\n", spec);
+    cng_dprintf(2, "crest-chroot: --fake-id '%s': expected UID or UID:GID\n", spec);
     usage(2);
     return 2;
 }
@@ -737,20 +737,20 @@ static int host_exists(const char *path) {
  * file — `mount --bind` takes either, and the file form is what
  * `-b /etc/resolv.conf:/etc/resolv.conf` is; only existence is required of it
  * here. This is the arm64chroot
- * order — host first — and it is the reverse of what chroot-ng accepted before
+ * order — host first — and it is the reverse of what crest-chroot accepted before
  * 0.1.0, so a swapped spec is diagnosed explicitly below rather than silently
  * mounting the wrong way round. Host paths may not contain ':'.
  * Returns 0, or -1 with a diagnostic. */
 static int add_bind(char *spec, const char **bind_g, const char **bind_h,
                     int *bind_ro, int *nb) {
     if (*nb >= CNG_MAX_BINDS) {
-        cng_dprintf(2, "chroot-ng: too many --bind mounts (max %d)\n",
+        cng_dprintf(2, "crest-chroot: too many --bind mounts (max %d)\n",
                     CNG_MAX_BINDS);
         return -1;
     }
     char *c = strchr(spec, ':'); /* first ':' splits SRC | DST[:ro] */
     if (!c || c == spec || c[1] == '\0') {
-        cng_dprintf(2, "chroot-ng: --bind '%s': expected SRC:DST[:ro]\n", spec);
+        cng_dprintf(2, "crest-chroot: --bind '%s': expected SRC:DST[:ro]\n", spec);
         return -1;
     }
     *c = '\0';
@@ -765,30 +765,30 @@ static int add_bind(char *spec, const char **bind_g, const char **bind_h,
     }
     if (dst[0] != '/') {
         cng_dprintf(2,
-                    "chroot-ng: --bind '%s': destination must be an absolute "
+                    "crest-chroot: --bind '%s': destination must be an absolute "
                     "guest path\n",
                     src);
         return -1;
     }
     if (strcmp(dst, "/") == 0) {
-        cng_dprintf(2, "chroot-ng: --bind '%s': cannot bind over the guest "
+        cng_dprintf(2, "crest-chroot: --bind '%s': cannot bind over the guest "
                        "root\n", src);
         return -1;
     }
     if (!host_exists(src)) {
-        cng_dprintf(2, "chroot-ng: --bind source '%s': not found\n", src);
+        cng_dprintf(2, "crest-chroot: --bind source '%s': not found\n", src);
         /* The pre-0.1.0 spelling was GUEST:HOST. If the operands read as a
          * swap, say so — the failure is otherwise a bare ENOENT and the
          * successful-but-inverted case would be silent. */
         if (dst[0] == '/' && host_exists(dst))
             cng_dprintf(2,
-                        "chroot-ng: -b now takes SRC:DST (host path first); "
+                        "crest-chroot: -b now takes SRC:DST (host path first); "
                         "did you mean '%s:%s'?\n",
                         dst, src);
         return -1;
     }
     if (strcmp(src, "/") == 0) {
-        cng_dprintf(2, "chroot-ng: --bind '%s': cannot bind the host root\n",
+        cng_dprintf(2, "crest-chroot: --bind '%s': cannot bind the host root\n",
                     src);
         return -1;
     }
@@ -813,7 +813,7 @@ static int add_bind(char *spec, const char **bind_g, const char **bind_h,
 static int add_env(char *spec, char **env_set, int *ne) {
     const char *eq = strchr(spec, '=');
     if (!eq || eq == spec) {
-        cng_dprintf(2, "chroot-ng: --env '%s': expected VAR=VAL\n", spec);
+        cng_dprintf(2, "crest-chroot: --env '%s': expected VAR=VAL\n", spec);
         return -1;
     }
     size_t klen = (size_t)(eq - spec) + 1;   /* compare through the '=' */
@@ -823,7 +823,7 @@ static int add_env(char *spec, char **env_set, int *ne) {
             return 0;
         }
     if (*ne >= CNG_MAX_ENV) {
-        cng_dprintf(2, "chroot-ng: too many --env entries (max %d)\n",
+        cng_dprintf(2, "crest-chroot: too many --env entries (max %d)\n",
                     CNG_MAX_ENV);
         return -1;
     }
@@ -1010,12 +1010,12 @@ int cng_main(int argc, char **argv, char **envp, unsigned long *auxv) {
         return 2;
     }
     rootfs = argv[i];
-    /* An empty one is almost always an unset variable — `chroot-ng "$ROOTFS"
+    /* An empty one is almost always an unset variable — `crest-chroot "$ROOTFS"
      * rm -rf /` — and it used to mean the host root, silently: the rootfs is a
      * prefix, and the empty prefix is the identity. "/" is how that is asked
      * for on purpose. */
     if (!*rootfs) {
-        cng_dprintf(2, "chroot-ng: <rootfs> is empty (use '/' for the host "
+        cng_dprintf(2, "crest-chroot: <rootfs> is empty (use '/' for the host "
                        "root)\n");
         return 2;
     }
