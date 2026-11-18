@@ -4311,6 +4311,7 @@ void cng_clone_convert(struct cng_uregs *ur) {
         cng_nnp_fork_child(nnp); /* one task, holding what we held */
         cng_rseq_fork_child(rseq_keep);
         cng_exec_fork_child(); /* an exec another thread had in flight is not ours */
+        cng_scratch_fork_child();
         /* ...nor a bounced dispatch another thread was blocked in. */
         __atomic_store_n(&g_disp_bounced, 0, __ATOMIC_RELAXED);
         /* The child inherited both the mappings and the attach list, so the
