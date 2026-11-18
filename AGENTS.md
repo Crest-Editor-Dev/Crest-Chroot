@@ -1,4 +1,4 @@
-# Chroot-NG
+# Crest-Chroot
 
 Guidelines for AI agents when working with this codebase.
 
