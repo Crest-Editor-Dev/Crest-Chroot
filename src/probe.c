@@ -142,7 +142,7 @@ int cng_cmd_probe(int argc, char **argv, char **envp, unsigned long *auxv) {
     (void)envp;
     int blocked = 0;
 
-    cng_puts(1, "chroot-ng probe\n");
+    cng_puts(1, "crest-chroot probe\n");
 
     /* kernel */
     struct new_utsname u;

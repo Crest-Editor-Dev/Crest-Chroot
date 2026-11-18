@@ -94,10 +94,12 @@ ASRC := $(shell find src -name '*.S' 2>/dev/null)
 OBJ  := $(patsubst %,$(BUILD)/%.o,$(CSRC) $(ASRC))
 DEP  := $(OBJ:.o=.d)
 
-BIN  := $(BUILD)/chroot-ng
+BIN  := $(BUILD)/crest-chroot
 
 .PHONY: all clean run test probe
 all: $(BIN)
+	@cp -f $(BIN) $(BUILD)/libcrest-chroot.so
+	@ln -sf crest-chroot $(BUILD)/chroot-ng
 
 # The linker script shapes the image as much as the objects do (its PHDRS is
 # the whole program header table), so a change to it relinks.

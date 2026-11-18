@@ -521,7 +521,7 @@ static void put_uptime(int fd) {
  * through would leave the two contradicting each other, and distro install
  * scripts read whichever one they were written against. */
 static void put_version(int fd) {
-    cng_dprintf(fd, "Linux version %s (chroot-ng@localhost) (chroot-ng) %s\n",
+    cng_dprintf(fd, "Linux version %s (crest@localhost) (crest-chroot) %s\n",
                 CNG_KREL, CNG_KVER);
 }
 

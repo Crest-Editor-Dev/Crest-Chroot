@@ -157,7 +157,7 @@ static void usage(int fd) {
 }
 
 static void version(void) {
-    cng_dprintf(1, "chroot-ng %s (built %s %s)\n", CNG_VERSION, __DATE__,
+    cng_dprintf(1, "crest-chroot %s (built %s %s)\n", CNG_VERSION, __DATE__,
                 __TIME__);
 }
 

@@ -294,7 +294,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
     /* Stamp the build: this tree is copied to test devices by hand, so a trace
      * has to be able to say whether it came from the build you just made. */
     if (cng_g_debug)
-        cng_dprintf(2, "[cng] chroot-ng %s (built %s %s)\n", CNG_VERSION,
+        cng_dprintf(2, "[cng] crest-chroot %s (built %s %s)\n", CNG_VERSION,
                     __DATE__, __TIME__);
 
     /* The environment the guest will see, built from -E/--env plus TERM /
