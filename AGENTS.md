@@ -31,5 +31,3 @@ Commit messages:
 * The header must follow this format: `scope: brief description of change`.
 * The commit body must be detailed and explain why change was necessary, what was the story behind it. If that's a new feature, explain what it does. If that's a bugfix, explain what was the bug and how it was fixed.
 * Wrap each line of the commit body at 72 characters.
-* Add `Co-Authored-By` footer with explanation who you are.
-* It is forbidden to include `Claude-Session` reference in the commit message.
