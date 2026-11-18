@@ -143,27 +143,27 @@ static void build_guest_env(char *const *env_set, int ne, char **host,
  * Returns 0, or -1 with a diagnostic. */
 static int set_workdir(struct cng_fs *fs, const char *wd) {
     if (!*wd) {   /* "" would join to the cwd; chdir("") is ENOENT */
-        cng_dprintf(2, "chroot-ng: --work-dir: empty path\n");
+        cng_dprintf(2, "crest-chroot: --work-dir: empty path\n");
         return -1;
     }
     char host[CNG_PATH_MAX];
     if (cng_resolve(wd, 1, host, sizeof host) != 0) {
-        cng_dprintf(2, "chroot-ng: --work-dir '%s': cannot resolve\n", wd);
+        cng_dprintf(2, "crest-chroot: --work-dir '%s': cannot resolve\n", wd);
         return -1;
     }
     char st[128];   /* struct stat, aarch64 */
     long r = cng_pin_fstatat(host, st, 0);
     if (r == -ENOENT) {
-        cng_dprintf(2, "chroot-ng: --work-dir '%s': not found\n", wd);
+        cng_dprintf(2, "crest-chroot: --work-dir '%s': not found\n", wd);
         return -1;
     }
     if (r != 0) {
-        cng_dprintf(2, "chroot-ng: --work-dir '%s': cannot stat (errno %d)\n",
+        cng_dprintf(2, "crest-chroot: --work-dir '%s': cannot stat (errno %d)\n",
                     wd, (int)-r);
         return -1;
     }
     if ((*(unsigned *)(st + ST_MODE_OFF) & CNG_S_IFMT) != CNG_S_IFDIR) {
-        cng_dprintf(2, "chroot-ng: --work-dir '%s': not a directory\n", wd);
+        cng_dprintf(2, "crest-chroot: --work-dir '%s': not a directory\n", wd);
         return -1;
     }
     /* The guest-side name of what we resolved: absolute and symlink-free by
@@ -173,7 +173,7 @@ static int set_workdir(struct cng_fs *fs, const char *wd) {
     char guest[CNG_PATH_MAX];
     if (cng_fs_untranslate(fs, host, guest, sizeof guest) != 0 &&
         cng_fs_abscanon(fs, wd, guest, sizeof guest) != 0) {
-        cng_dprintf(2, "chroot-ng: --work-dir '%s': path too long\n", wd);
+        cng_dprintf(2, "crest-chroot: --work-dir '%s': path too long\n", wd);
         return -1;
     }
     /* The real cwd first, and its failure is the whole answer: a relative path
@@ -185,7 +185,7 @@ static int set_workdir(struct cng_fs *fs, const char *wd) {
      * under --fake-id the guest believes it is root while the kernel does not. */
     long r2 = sys_chdir(host);
     if (r2 != 0) {
-        cng_dprintf(2, "chroot-ng: --work-dir '%s': cannot enter (errno %d)\n",
+        cng_dprintf(2, "crest-chroot: --work-dir '%s': cannot enter (errno %d)\n",
                     wd, (int)-r2);
         return -1;
     }
@@ -315,13 +315,13 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
      * the guest at an ancestor of the tree that was named — or, since the cut
      * lands mid-component, at a path that is not a directory at all. */
     if (cng_fs_init(&g_fs, rootfs) != 0) {
-        cng_dprintf(2, "chroot-ng: rootfs '%s': path too long (max %d)\n",
+        cng_dprintf(2, "crest-chroot: rootfs '%s': path too long (max %d)\n",
                     rootfs, (int)sizeof g_fs.rootfs - 1);
         return 2;
     }
     for (int j = 0; j < nb; j++)
         if (cng_fs_add_bind(&g_fs, bind_g[j], bind_h[j], bind_ro[j]) != 0) {
-            cng_dprintf(2, "chroot-ng: --bind '%s:%s': path too long\n",
+            cng_dprintf(2, "crest-chroot: --bind '%s:%s': path too long\n",
                         bind_h[j], bind_g[j]);
             return 2;
         }
@@ -351,7 +351,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
                      ? sys_chdir(rhost)
                      : -ENAMETOOLONG;
         if (r != 0) {
-            cng_dprintf(2, "chroot-ng: rootfs '%s': cannot enter (errno %d)\n",
+            cng_dprintf(2, "crest-chroot: rootfs '%s': cannot enter (errno %d)\n",
                         rootfs, (int)-r);
             return 1;
         }
@@ -391,7 +391,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
      * the host file. */
     char host_prog[CNG_PATH_MAX];
     if (cng_resolve(prog_guest, 1, host_prog, sizeof host_prog) != 0) {
-        cng_dprintf(2, "chroot-ng: cannot resolve %s\n", prog_guest);
+        cng_dprintf(2, "crest-chroot: cannot resolve %s\n", prog_guest);
         return 1;
     }
     /* /proc/self/exe (and the comm derived from it) for the initial program. It
@@ -446,7 +446,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
     struct cng_loaded prog;
     int rc = cng_load_elf(host_prog, 0, &prog);
     if (rc != CNG_LOAD_OK) {
-        cng_dprintf(2, "chroot-ng: cannot load %s (%s): %s\n", prog_guest,
+        cng_dprintf(2, "crest-chroot: cannot load %s (%s): %s\n", prog_guest,
                     host_prog, load_err(rc));
         return 1;
     }
@@ -460,7 +460,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
             ip = join2(ipath, sizeof ipath, libprefix, prog.interp);
             if (!ip) {
                 cng_dprintf(2,
-                            "chroot-ng: interpreter path is too long: %s + %s\n",
+                            "crest-chroot: interpreter path is too long: %s + %s\n",
                             libprefix, prog.interp);
                 return 1;
             }
@@ -471,7 +471,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
 
         int rc2 = cng_load_elf(ip, 0, &interp);
         if (rc2 != CNG_LOAD_OK) {
-            cng_dprintf(2, "chroot-ng: cannot load interpreter %s: %s\n", ip,
+            cng_dprintf(2, "crest-chroot: cannot load interpreter %s: %s\n", ip,
                         load_err(rc2));
             return 1;
         }
@@ -483,7 +483,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
         entry = prog.entry;
     }
     if (!sp) {
-        cng_dprintf(2, "chroot-ng: argument list too long\n");
+        cng_dprintf(2, "crest-chroot: argument list too long\n");
         return 1;
     }
     /* The first generation. Nothing is retired here — there is no program being
@@ -548,7 +548,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
          * warning says exactly that, so a run that goes on does so knowing. */
         if (mrc < 0 && !cng_g_rewrite) {
             cng_dprintf(2,
-                        "chroot-ng: cannot install the seccomp monitor (errno %d)"
+                        "crest-chroot: cannot install the seccomp monitor (errno %d)"
                         " and nothing else would intercept the guest's syscalls:"
                         " not entering it\n"
                         "           (seccomp is inert under qemu-user and needs a"
@@ -560,7 +560,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
         }
         if (mrc < 0)
             cng_dprintf(2,
-                        "chroot-ng: warning: could not install the seccomp"
+                        "crest-chroot: warning: could not install the seccomp"
                         " monitor (errno %d); only the svc sites -R rewrote are"
                         " intercepted\n"
                         "           (code in a library the guest's ld.so maps"
@@ -579,7 +579,7 @@ int cng_run(const char *rootfs, const char *libprefix, const char *workdir,
         const char *shm_why = cng_dev_shm_missing();
         if (shm_why)
             cng_dprintf(2,
-                        "chroot-ng: warning: no temp directory can stand in for"
+                        "crest-chroot: warning: no temp directory can stand in for"
                         " the /dev/shm this host lacks, so the guest has none"
                         " (shm_open and sem_open fail)\n"
                         "           %s%s\n"

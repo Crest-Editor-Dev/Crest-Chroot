@@ -173,7 +173,7 @@ static int map_anon(int fd, const Elf64_Ehdr *eh, const Elf64_Phdr *ph,
             sys_munmap(seg, span + pool_extra);
             if (mr == -EACCES && (prot & CNG_PROT_EXEC))
                 return CNG_LOAD_EEXEC; /* execmem denied */
-            cng_dprintf(2, "chroot-ng: load: mprotect(%lx len=%lu prot=%d)"
+            cng_dprintf(2, "crest-chroot: load: mprotect(%lx len=%lu prot=%d)"
                            " errno=%d\n",
                         ps, (unsigned long)(pe - ps), prot, (int)-mr);
             return CNG_LOAD_EMAP;
@@ -221,7 +221,7 @@ static int map_file(int fd, const Elf64_Ehdr *eh, const Elf64_Phdr *ph,
              * both routes into this function — so nothing should arrive here.
              * This is what keeps that true if a third route is ever added. */
             if ((ph[i].p_offset ^ vstart) & (cng_page_size - 1)) {
-                cng_dprintf(2, "chroot-ng: load: file mmap(%lx): p_offset %lx"
+                cng_dprintf(2, "crest-chroot: load: file mmap(%lx): p_offset %lx"
                                " does not share the page offset of p_vaddr %lx"
                                " (page %lu)\n",
                             vpage, (unsigned long)ph[i].p_offset,
@@ -234,7 +234,7 @@ static int map_file(int fd, const Elf64_Ehdr *eh, const Elf64_Phdr *ph,
                                CNG_MAP_PRIVATE | CNG_MAP_FIXED, fd,
                                (long)(ph[i].p_offset - (vstart - vpage)));
             if (m == CNG_MAP_FAILED || cng_is_err((long)m)) {
-                cng_dprintf(2, "chroot-ng: load: file mmap(%lx len=%lu prot=%d)"
+                cng_dprintf(2, "crest-chroot: load: file mmap(%lx len=%lu prot=%d)"
                                " errno=%d\n",
                             vpage, (unsigned long)map_len, prot,
                             cng_errno((long)m));

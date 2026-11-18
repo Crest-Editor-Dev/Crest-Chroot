@@ -496,9 +496,9 @@ void cng_dprintf(int fd, const char *fmt, ...) {
 
 _Noreturn void cng_die(const char *msg, long err) {
     if (err)
-        cng_dprintf(2, "chroot-ng: %s: errno %d\n", msg, (int)(err < 0 ? -err : err));
+        cng_dprintf(2, "crest-chroot: %s: errno %d\n", msg, (int)(err < 0 ? -err : err));
     else
-        cng_dprintf(2, "chroot-ng: %s\n", msg);
+        cng_dprintf(2, "crest-chroot: %s\n", msg);
     sys_exit_group(1);
 }
 

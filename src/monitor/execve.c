@@ -1525,7 +1525,7 @@ static void cng_exec_reset(void) {
  * the rootfs lives on the device (see the load-failure trace below). */
 static _Noreturn void exec_fatal(const char *path, const char *what, long err) {
     cng_dprintf(2,
-                "chroot-ng: exec %s: %s failed (code %d) with the new image "
+                "crest-chroot: exec %s: %s failed (code %d) with the new image "
                 "already mapped over the old one; nothing left to return to\n",
                 path, what, (int)err);
     unsigned long dfl[4] = {0, 0, 0, 0};
