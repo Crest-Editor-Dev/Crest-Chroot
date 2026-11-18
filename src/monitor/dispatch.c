@@ -6523,6 +6523,7 @@ static long dispatch_1(long nr, long a0, long a1, long a2, long a3, long a4,
         if ((*(unsigned *)(sb + STAT_MODE_OFF) & 0170000) != 0040000)
             return -ENOTDIR;
         cng_fs_chroot(cng_g_fs, gc, hp);
+        pcache_invalidate();
         return 0;
     }
 
